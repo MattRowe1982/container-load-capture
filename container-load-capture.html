@@ -720,7 +720,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 function checkConfig() {
-  const isConfigured = CONFIG.CLIENT_ID !== "YOUR_CLIENT_ID_HERE" && CONFIG.TENANT_ID !== "YOUR_TENANT_ID_HERE";
+  const isConfigured = CONFIG.CLIENT_ID !== "6219f980-72b1-4040-8c56-67ab9f46baf0" && CONFIG.TENANT_ID !== "a6bbb2fe-c2ff-483d-9248-7e12174d6132";
   document.getElementById('configWarning').style.display = isConfigured ? 'none' : 'block';
 }
 
@@ -743,7 +743,7 @@ function buildPhotoTypeDropdown() {
 // ─── MICROSOFT GRAPH AUTH (PKCE) ──────────────────────────────────────────
 // Uses the Microsoft Identity platform with PKCE flow — no client secret needed in browser
 async function initAuth() {
-  if (CONFIG.CLIENT_ID === "YOUR_CLIENT_ID_HERE") return;
+  if (CONFIG.CLIENT_ID === "6219f980-72b1-4040-8c56-67ab9f46baf0") return;
 
   // Check for auth callback
   const params = new URLSearchParams(window.location.search);
