@@ -44,7 +44,7 @@ select { width: 100%; padding: 13px 16px; background: rgba(255,255,255,0.05); bo
 select:focus { border-color: var(--blue-bright); background: rgba(61,142,240,0.08); }
 select option { background: var(--navy-mid); color: var(--white); }
 select optgroup { background: #0d1f3c; color: #3d8ef0; font-weight: 700; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
-select optgroup option { background: #112240; color: #ffffff; font-weight: 500; font-size: 15px; padding-left: 12px; }
+select optgroup option { background: #112240; color: #ffffff; font-weight: 500; font-size: 15px; }
 .select-arrow { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-muted); font-size: 12px; }
 .shipment-badge { display: none; align-items: center; gap: 10px; background: rgba(0,200,150,0.1); border: 1.5px solid rgba(0,200,150,0.25); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; }
 .shipment-badge.visible { display: flex; }
@@ -184,13 +184,7 @@ select optgroup option { background: #112240; color: #ffffff; font-weight: 500; 
 <div class="toast" id="toast"></div>
 
 <script>
-var CLIENT_ID = "6219f980-72b1-4040-8c56-67ab9f46baf0";
-var TENANT_ID = "a6bbb2fe-c2ff-483d-9248-7e12174d6132";
-var SITE_URL = "https://lavertoncoldstorage.sharepoint.com";
-var SITE_PATH = "/sites/SharedOperationsFiles";
-var LIBRARY_NAME = "Container Load Photos";
-var LOG_LIST = "Container Load Log";
-var SHIPMENTS_LIST = "Active Shipments";
+var WORKER_URL = "https://container-load-api.matthew-rowe1982.workers.dev";
 
 var PHOTO_TYPES = [
   { group: "Pre-Load Inspection", options: [
@@ -224,22 +218,14 @@ var PHOTO_TYPES = [
   ]}
 ];
 
-var gToken = null;
 var gShipment = null;
 var gPhotoType = null;
 var gPhotoBlob = null;
-var gSiteId = null;
 var toastTimer = null;
 
 window.onload = function() {
   buildDropdown();
-  var params = new URLSearchParams(window.location.search);
-  var code = params.get("code");
-  if (code) { handleCallback(code); return; }
-  var tok = sessionStorage.getItem("lcs_tok");
-  var exp = sessionStorage.getItem("lcs_exp");
-  if (tok && exp && Date.now() < parseInt(exp)) { gToken = tok; loadShipments(); return; }
-  startAuth();
+  loadShipments();
 };
 
 function buildDropdown() {
@@ -258,84 +244,27 @@ function buildDropdown() {
   }
 }
 
-function generateVerifier() {
-  var arr = new Uint8Array(32);
-  crypto.getRandomValues(arr);
-  return btoa(String.fromCharCode.apply(null, arr)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-}
-
-function startAuth() {
-  var v = generateVerifier();
-  sessionStorage.setItem("lcs_cv", v);
-  crypto.subtle.digest("SHA-256", new TextEncoder().encode(v)).then(function(buf) {
-    var ch = btoa(String.fromCharCode.apply(null, new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-    var ru = encodeURIComponent(window.location.origin + window.location.pathname);
-    var sc = encodeURIComponent("https://graph.microsoft.com/Files.ReadWrite https://graph.microsoft.com/Sites.ReadWrite.All offline_access");
-    window.location.href = "https://login.microsoftonline.com/" + TENANT_ID + "/oauth2/v2.0/authorize?client_id=" + CLIENT_ID + "&response_type=code&redirect_uri=" + ru + "&scope=" + sc + "&code_challenge=" + ch + "&code_challenge_method=S256&prompt=select_account";
-  });
-}
-
-function handleCallback(code) {
-  var v = sessionStorage.getItem("lcs_cv");
-  var ru = window.location.origin + window.location.pathname;
-  fetch("https://login.microsoftonline.com/" + TENANT_ID + "/oauth2/v2.0/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: "client_id=" + CLIENT_ID + "&code=" + encodeURIComponent(code) + "&redirect_uri=" + encodeURIComponent(ru) + "&grant_type=authorization_code&code_verifier=" + encodeURIComponent(v)
-  }).then(function(r) { return r.json(); }).then(function(d) {
-    if (d.access_token) {
-      gToken = d.access_token;
-      sessionStorage.setItem("lcs_tok", d.access_token);
-      sessionStorage.setItem("lcs_exp", Date.now() + d.expires_in * 1000 - 60000);
-      window.history.replaceState({}, document.title, window.location.pathname);
-      loadShipments();
-    } else { showToast("Auth failed: " + (d.error_description || "unknown"), "error"); }
-  }).catch(function() { showToast("Auth error - please refresh", "error"); });
-}
-
-function authFetch(url, opts) {
-  if (!opts) opts = {};
-  if (!opts.headers) opts.headers = {};
-  opts.headers["Authorization"] = "Bearer " + gToken;
-  return fetch(url, opts);
-}
-
-function getSiteId() {
-  if (gSiteId) return Promise.resolve(gSiteId);
-  var h = SITE_URL.replace("https://", "");
-  return authFetch("https://graph.microsoft.com/v1.0/sites/" + h + ":" + SITE_PATH)
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (!d.id) throw new Error("Site not found. Check SITE_PATH.");
-      gSiteId = d.id;
-      return gSiteId;
-    });
-}
-
 function loadShipments() {
   var sel = document.getElementById("shipmentSelect");
   sel.innerHTML = "<option value=''>Loading...</option>";
-  getSiteId().then(function(sid) {
-    return authFetch("https://graph.microsoft.com/v1.0/sites/" + sid + "/lists/" + encodeURIComponent(SHIPMENTS_LIST) + "/items?$expand=fields");
-  }).then(function(r) { return r.json(); }).then(function(d) {
-    var items = d.value || [];
-    sel.innerHTML = "<option value=''>Select shipment...</option>";
-    if (items.length === 0) { showToast("No items in Active Shipments list", "error"); return; }
-    items.forEach(function(item) {
-      var f = item.fields || {};
-      var t = f.ShipmentNumber || f.Title || "";
-      var c = f.Customer || "";
-      if (!t) return;
-      var o = document.createElement("option");
-      o.value = t;
-      o.textContent = c ? t + " - " + c : t;
-      sel.appendChild(o);
+  fetch(WORKER_URL + "/shipments")
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var items = d.shipments || [];
+      sel.innerHTML = "<option value=''>Select shipment...</option>";
+      if (items.length === 0) { showToast("No active shipments found", "error"); return; }
+      items.forEach(function(s) {
+        var o = document.createElement("option");
+        o.value = s.shipmentNumber;
+        o.textContent = s.customer ? s.shipmentNumber + " - " + s.customer : s.shipmentNumber;
+        sel.appendChild(o);
+      });
+    })
+    .catch(function(e) {
+      sel.innerHTML = "<option value=''>Error - tap to retry</option>";
+      sel.onclick = loadShipments;
+      showToast("Could not load shipments", "error");
     });
-  }).catch(function(e) {
-    sel.innerHTML = "<option value=''>Error - tap to retry</option>";
-    sel.onclick = loadShipments;
-    showToast("Load error: " + e.message, "error");
-  });
 }
 
 function onShipmentChange() {
@@ -405,72 +334,33 @@ function retakePhoto(e) {
 }
 
 function submitPhoto() {
-  if (!gToken || !gShipment || !gPhotoType || !gPhotoBlob) { showToast("Complete all steps first", "error"); return; }
+  if (!gShipment || !gPhotoType || !gPhotoBlob) { showToast("Complete all steps first", "error"); return; }
   document.getElementById("btnSubmit").disabled = true;
   document.getElementById("btnBack3").disabled = true;
   document.getElementById("loadingText").textContent = "Uploading photo...";
   document.getElementById("loadingOverlay").classList.add("visible");
 
-  var now = new Date();
-  var yyyy = now.getFullYear().toString();
-  var mm = String(now.getMonth() + 1).padStart(2, "0");
-  var ts = now.getFullYear().toString() + mm + String(now.getDate()).padStart(2,"0") + String(now.getHours()).padStart(2,"0") + String(now.getMinutes()).padStart(2,"0") + String(now.getSeconds()).padStart(2,"0");
-  var fileName = gShipment + "_" + gPhotoType + "_" + ts + ".jpg";
-  var driveId = null;
+  var formData = new FormData();
+  formData.append("photo", gPhotoBlob, "photo.jpg");
+  formData.append("shipment", gShipment);
+  formData.append("photoType", gPhotoType);
 
-  getSiteId().then(function(sid) {
-    return authFetch("https://graph.microsoft.com/v1.0/sites/" + sid + "/drives")
-      .then(function(r) { return r.json(); })
-      .then(function(d) {
-        var drives = d.value || [];
-        for (var i = 0; i < drives.length; i++) { if (drives[i].name === LIBRARY_NAME) { driveId = drives[i].id; break; } }
-        if (!driveId) throw new Error("Library not found: " + LIBRARY_NAME);
-        document.getElementById("loadingText").textContent = "Creating folders...";
-        return makeFolder(sid, driveId, "", yyyy)
-          .then(function() { return makeFolder(sid, driveId, yyyy, mm); })
-          .then(function() { return makeFolder(sid, driveId, yyyy + "/" + mm, gShipment); });
-      })
-      .then(function() {
-        document.getElementById("loadingText").textContent = "Saving photo...";
-        var path = "/" + yyyy + "/" + mm + "/" + gShipment + "/" + fileName;
-        return authFetch("https://graph.microsoft.com/v1.0/sites/" + sid + "/drives/" + driveId + "/root:" + path + ":/content", {
-          method: "PUT",
-          headers: { "Content-Type": "image/jpeg" },
-          body: gPhotoBlob
-        });
-      })
-      .then(function(r) { return r.json(); })
-      .then(function(u) {
-        if (!u.id) throw new Error(u.error ? u.error.message : "Upload failed");
-        document.getElementById("loadingText").textContent = "Saving log...";
-        return authFetch("https://graph.microsoft.com/v1.0/sites/" + sid + "/lists/" + encodeURIComponent(LOG_LIST) + "/items", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fields: { Title: gShipment, ShipmentNumber: gShipment, PhotoType: gPhotoType, PhotoFileName: fileName, PhotoLink: u.webUrl || "", DateSubmitted: now.toISOString() } })
-        }).then(function() { return u.webUrl; }).catch(function() { return u.webUrl; });
-      })
-      .then(function() {
-        document.getElementById("loadingOverlay").classList.remove("visible");
-        var sel = document.getElementById("photoTypeSelect");
-        var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : gPhotoType;
-        document.getElementById("successDetail").innerHTML = "<span>" + gShipment + "</span>\n" + label + "\n" + fileName;
-        goToScreen(4);
-      });
-  }).catch(function(e) {
-    document.getElementById("loadingOverlay").classList.remove("visible");
-    document.getElementById("btnSubmit").disabled = false;
-    document.getElementById("btnBack3").disabled = false;
-    showToast("Failed: " + e.message, "error");
-  });
-}
-
-function makeFolder(sid, did, parentPath, name) {
-  var ref = parentPath ? "root:/" + parentPath + ":" : "root";
-  return authFetch("https://graph.microsoft.com/v1.0/sites/" + sid + "/drives/" + did + "/" + ref + "/children", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: name, folder: {}, "@microsoft.graph.conflictBehavior": "fail" })
-  }).then(function() { return true; }).catch(function() { return true; });
+  fetch(WORKER_URL + "/upload", { method: "POST", body: formData })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      document.getElementById("loadingOverlay").classList.remove("visible");
+      if (d.error) throw new Error(d.error);
+      var sel = document.getElementById("photoTypeSelect");
+      var label = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : gPhotoType;
+      document.getElementById("successDetail").innerHTML = "<span>" + gShipment + "</span>\n" + label + "\n" + d.fileName;
+      goToScreen(4);
+    })
+    .catch(function(e) {
+      document.getElementById("loadingOverlay").classList.remove("visible");
+      document.getElementById("btnSubmit").disabled = false;
+      document.getElementById("btnBack3").disabled = false;
+      showToast("Upload failed: " + e.message, "error");
+    });
 }
 
 function startAnother() {
